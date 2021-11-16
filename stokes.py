@@ -1,24 +1,24 @@
 import dolfin as df
 import matplotlib.pyplot as plt
+from utils import Wall, Top, Btm, Obst, Params
+import argparse
+import os
 
-def wall(x, on_bnd):
-    return on_bnd and x[0] < df.DOLFIN_EPS_LARGE or x[0] > 1.-df.DOLFIN_EPS_LARGE
-def top(x, on_bnd):
-    return on_bnd and x[1] > 1-df.DOLFIN_EPS_LARGE
-def btm(x, on_bnd):
-    return on_bnd and x[1] < df.DOLFIN_EPS_LARGE
-def obst(x, on_bnd):
-    return on_bnd and x[0] > df.DOLFIN_EPS_LARGE and x[0] < 1.-df.DOLFIN_EPS_LARGE and \
-        x[1] > df.DOLFIN_EPS_LARGE and x[1] < 1.0 - df.DOLFIN_EPS_LARGE
+def parse_args():
+    parser = argparse.ArgumentParser(description="Solve Stokes flow")
+    parser.add_argument("folder", type=str, help="Input/output folder")
+    return parser.parse_args()
 
-Wall = df.AutoSubDomain(wall)
-Top = df.AutoSubDomain(top)
-Btm = df.AutoSubDomain(btm)
-Obst = df.AutoSubDomain(obst)
 
 if __name__ == "__main__":
+    args = parse_args()
+    params = Params(os.path.join(args.folder, "params.dat"))
+    mesh_filename = os.path.join(args.folder, params["mesh"])
+    Lx = params["Lx"]
+    Ly = params["Ly"]
+
     mesh = df.Mesh()
-    with df.HDF5File(mesh.mpi_comm(), "porous_mesh.h5", "r") as h5f:
+    with df.HDF5File(mesh.mpi_comm(), mesh_filename, "r") as h5f:
         h5f.read(mesh, "mesh", False)
 
     V_el = df.VectorElement("Lagrange", mesh.ufl_cell(), 2)
@@ -39,10 +39,10 @@ if __name__ == "__main__":
     subd = df.MeshFunction("size_t", mesh, mesh.topology().dim()-1)
     subd.set_all(0)
 
-    Wall.mark(subd, 1)
-    Top.mark(subd, 2)
-    Btm.mark(subd, 3)
-    Obst.mark(subd, 4)
+    Wall(Lx, Ly).mark(subd, 1)
+    Top(Lx, Ly).mark(subd, 2)
+    Btm(Lx, Ly).mark(subd, 3)
+    Obst(Lx, Ly).mark(subd, 4)
 
     bcu_wall = df.DirichletBC(W.sub(0), df.Constant((0., 0.)), subd, 1)
     bcu_obst = df.DirichletBC(W.sub(0), df.Constant((0., 0.)), subd, 4)
@@ -56,6 +56,7 @@ if __name__ == "__main__":
     P, btmp = df.assemble_system(b_stokes, L_stokes, bcs=bcs_stokes)
     solver_stokes = df.PETScKrylovSolver("minres", "amg")
     solver_stokes.parameters["monitor_convergence"] = True
+    solver_stokes.parameters["relative_tolerance"] = 1e-12
     solver_stokes.set_operators(A, P)
     solver_stokes.solve(w_.vector(), b)
 
@@ -68,5 +69,5 @@ if __name__ == "__main__":
     print("uy_mean =", uy_mean)
     u_.vector()[:] /= abs(uy_mean)
 
-    with df.HDF5File(mesh.mpi_comm(), "velocity.h5", "w") as h5f:
+    with df.HDF5File(mesh.mpi_comm(), os.path.join(args.folder, "velocity.h5"), "w") as h5f:
         h5f.write(u_, "u")
